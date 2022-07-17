@@ -1,34 +1,37 @@
 extern crate csv;
-extern crate serde;
+extern crate env_logger;
 extern crate num_cpus;
+extern crate serde;
+
+#[macro_use]
+extern crate log;
+use log::Level;
 
 use csv::{ReaderBuilder, Trim};
 
 use std::env;
 //use std::error::Error;
 
-use std::fs::{File};
-use std::io::{BufReader};
+use std::fs::File;
+use std::io::BufReader;
 
 use std::io;
 use std::io::prelude::*;
 
-use std::thread;
 use std::sync::mpsc;
+use std::thread;
 
 use std::collections::HashMap;
 
-
-use serde::{Deserialize};
-
+use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 struct InputRecord {
-     #[serde(rename = "type")]
+    #[serde(rename = "type")]
     tx_type: String,
-     #[serde(rename = "client")]
+    #[serde(rename = "client")]
     tx_client: u16,
-     #[serde(rename = "tx")]
+    #[serde(rename = "tx")]
     tx_id: u32,
     #[serde(rename = "amount")]
     tx_amount: Option<f32>,
@@ -41,28 +44,29 @@ struct ThreadInfo {
 }
 
 fn main() {
-
+    env_logger::init();
+    log!(Level::Debug, "env logger has been initialized");
 
     let mut args = env::args();
     let input_file = args.nth(1).expect("Please give input file name");
 
-
-    /* Based on no of cpus create worker threads */
+    /* Based on no of cpus we create worker threads */
     let mut thread_count = num_cpus::get();
     thread_count &= !0x2; // make it power of 2, just in case
 
     // create a stream of input records, using serde/csv
     let file = File::open(input_file).expect("Failed to open input file");
     let buf_reader = BufReader::new(file);
-    let mut rdr = ReaderBuilder::new().delimiter(b',').trim(Trim::All).from_reader(buf_reader);
+    let mut rdr = ReaderBuilder::new()
+        .delimiter(b',')
+        .trim(Trim::All)
+        .from_reader(buf_reader);
 
     // now use worker threads to process the input records
     start_work(thread_count, &mut rdr);
 }
 
-
 fn start_work(thread_count: usize, rdr: &mut csv::Reader<BufReader<File>>) -> u32 {
-
     /* Start thread_count worker threads and give them each the rx end
      * of a channel where they will receive input records to process.
      *
@@ -71,10 +75,16 @@ fn start_work(thread_count: usize, rdr: &mut csv::Reader<BufReader<File>>) -> u3
      * mapping from a client to a worker thread is fixed.
      */
     let mut thread_info_vec = Vec::new();
-    for _ in 0..thread_count {
+    for i in 0..thread_count {
         let (tx, rx) = mpsc::channel();
-        let handle  = thread::spawn( || worker_func(rx) );
-        let thread_info = ThreadInfo{tx: tx, handle: handle};
+        let handle = thread::Builder::new()
+            .name(i.to_string())
+            .spawn(|| worker_func(rx))
+            .expect("Failed to create thread");
+        let thread_info = ThreadInfo {
+            tx: tx,
+            handle: handle,
+        };
         thread_info_vec.push(thread_info);
     }
 
@@ -87,8 +97,9 @@ fn start_work(thread_count: usize, rdr: &mut csv::Reader<BufReader<File>>) -> u3
     io::stdout().flush().expect("Could not flush stdout");
     for result in rdr.deserialize() {
         let input_record: InputRecord = result.expect("Failed to parse input record");
+        // should validate inputrecord. Latter.
         let tx_client = input_record.tx_client;
-        let thread_info = &thread_info_vec[(tx_client as usize)%thread_count];
+        let thread_info = &thread_info_vec[(tx_client as usize) % thread_count];
         thread_info.tx.send(input_record).unwrap();
     }
 
@@ -96,7 +107,10 @@ fn start_work(thread_count: usize, rdr: &mut csv::Reader<BufReader<File>>) -> u3
     let mut count = 0;
     for info in thread_info_vec {
         drop(info.tx);
-        count += info.handle.join().expect("failed to join with worker thread");
+        count += info
+            .handle
+            .join()
+            .expect("failed to join with worker thread");
     }
     // Return number of client record
     count
@@ -126,24 +140,41 @@ struct ClientAccount {
 // client it is resposible for to stdout
 fn worker_func(rx: mpsc::Receiver<InputRecord>) -> u32 {
     let mut count = 0;
-    for client_acct in  worker_func_helper(rx) {
+    for client_acct in worker_func_helper(rx) {
         count += 1;
-        println!("{}, {:.4}, {:.4}, {:.4}, {}", client_acct.client, client_acct.available, client_acct.held, client_acct.total, client_acct.locked);
+        println!(
+            "{}, {:.4}, {:.4}, {:.4}, {}",
+            client_acct.client,
+            client_acct.available,
+            client_acct.held,
+            client_acct.total,
+            client_acct.locked
+        );
     }
+    log!(
+        Level::Debug,
+        "Thread {} processed {} client",
+        thread::current().name().unwrap(),
+        count
+    );
     count
 }
 
 // Business logic for worker is here.  Returns iterator of processed client
 // records
-fn worker_func_helper (rx: mpsc::Receiver<InputRecord>) -> impl Iterator<Item = ClientAccount> {
+fn worker_func_helper(rx: mpsc::Receiver<InputRecord>) -> impl Iterator<Item = ClientAccount> {
     let mut client_acct_map = HashMap::new();
     for record in rx {
-        let client_acct = client_acct_map.entry(record.tx_client).
-            or_insert(ClientAccount{
+        let client_acct = client_acct_map
+            .entry(record.tx_client)
+            .or_insert(ClientAccount {
                 client: record.tx_client,
-                available: 0.0, held: 0.0, total: 0.0,
+                available: 0.0,
+                held: 0.0,
+                total: 0.0,
                 txs: HashMap::new(),
-                locked: false});
+                locked: false,
+            });
         if client_acct.locked {
             continue;
         }
@@ -151,30 +182,38 @@ fn worker_func_helper (rx: mpsc::Receiver<InputRecord>) -> impl Iterator<Item = 
             let tx_amount = record.tx_amount.unwrap();
             client_acct.available += tx_amount;
             client_acct.total += tx_amount;
-            client_acct.txs.insert(record.tx_id,
-                                   TxRecord{record: record, in_dispute: false});
-
-        } else if record.tx_type.eq_ignore_ascii_case("withdrawl") || record.tx_type.eq_ignore_ascii_case("withdrawal") {
-            // seems long wrong spelling in the question. Accept both
+            client_acct.txs.insert(
+                record.tx_id,
+                TxRecord {
+                    record: record,
+                    in_dispute: false,
+                },
+            );
+        } else if record.tx_type.eq_ignore_ascii_case("withdrawl")
+            || record.tx_type.eq_ignore_ascii_case("withdrawal")
+        {
+            // seems wrong spelling in the question. Accept both
 
             let tx_amount = record.tx_amount.unwrap();
-            if  tx_amount <= client_acct.available {
+            if tx_amount <= client_acct.available {
                 client_acct.available -= tx_amount;
                 client_acct.total -= tx_amount;
-                client_acct.txs.insert(record.tx_id,
-                                       TxRecord{record: record, in_dispute: false});
+                client_acct.txs.insert(
+                    record.tx_id,
+                    TxRecord {
+                        record: record,
+                        in_dispute: false,
+                    },
+                );
             }
         } else if record.tx_type.eq_ignore_ascii_case("dispute") {
-
             if let Some(transaction) = client_acct.txs.get_mut(&record.tx_id) {
                 let tx_amount = transaction.record.tx_amount.unwrap();
                 client_acct.available -= tx_amount;
                 client_acct.held += tx_amount;
                 transaction.in_dispute = true;
-
             }
         } else if record.tx_type.eq_ignore_ascii_case("resolve") {
-
             if let Some(transaction) = client_acct.txs.get_mut(&record.tx_id) {
                 if transaction.in_dispute == true {
                     let tx_amount = transaction.record.tx_amount.unwrap();
@@ -184,7 +223,6 @@ fn worker_func_helper (rx: mpsc::Receiver<InputRecord>) -> impl Iterator<Item = 
                 }
             }
         } else if record.tx_type.eq_ignore_ascii_case("chargeback") {
-
             if let Some(transaction) = client_acct.txs.get(&record.tx_id) {
                 if transaction.in_dispute == true {
                     let tx_amount = transaction.record.tx_amount.unwrap();
@@ -194,7 +232,6 @@ fn worker_func_helper (rx: mpsc::Receiver<InputRecord>) -> impl Iterator<Item = 
                 }
             }
         } else {
-
             panic!("Unexpected record type: {:?}", record);
         }
     }
@@ -214,7 +251,7 @@ mod test {
 
     fn test_helper_func(data: &'static str, expected_output: &[Result]) {
         let (tx, rx) = mpsc::channel();
-        let _handle = thread::spawn(move || {
+        let _handle = thread::spawn(|| {
             let mut rdr = ReaderBuilder::new()
                 .trim(Trim::All)
                 .from_reader(data.as_bytes());
@@ -224,8 +261,14 @@ mod test {
             }
             drop(tx);
         });
-        for client_acct in  worker_func_helper(rx) {
-            let output = (client_acct.client, client_acct.available, client_acct.held, client_acct.total, client_acct.locked);
+        for client_acct in worker_func_helper(rx) {
+            let output = (
+                client_acct.client,
+                client_acct.available,
+                client_acct.held,
+                client_acct.total,
+                client_acct.locked,
+            );
             //println!("{:?}", output);
             assert!(expected_output.contains(&output));
         }
@@ -240,13 +283,13 @@ mod test {
         // Doing some part for start_work here.  Maybe could do it a better
         // way
         let (tx1, rx1) = mpsc::channel();
-        let handle1  = thread::spawn( || worker_func(rx1) );
+        let handle1 = thread::spawn(|| worker_func(rx1));
         let (tx2, rx2) = mpsc::channel();
-        let handle2  = thread::spawn( || worker_func(rx2) );
+        let handle2 = thread::spawn(|| worker_func(rx2));
         for result in rdr.deserialize() {
             let input_record: InputRecord = result.expect("Failed to parse input record");
             let tx_client = input_record.tx_client;
-            if (tx_client as usize)%2 == 0 {
+            if (tx_client as usize) % 2 == 0 {
                 tx1.send(input_record).unwrap();
             } else {
                 tx2.send(input_record).unwrap();
@@ -261,12 +304,11 @@ mod test {
         // just make sure each thread processed expected number of records
         assert_eq!(count1, expected_count[0]);
         assert_eq!(count2, expected_count[1]);
- }
-
+    }
 
     #[test]
     fn record_read_test() {
-           let data = "\
+        let data = "\
            type, client, tx, amount
            deposit, 1, 1, 1.0
            deposit, 2, 2, 2.0
@@ -276,15 +318,15 @@ mod test {
            resolve, 1, 3,
            chargeback, 1, 3,
            withdrawal, 2, 5, 3.0";
-           let mut rdr = ReaderBuilder::new()
-               .trim(Trim::All)
-               .from_reader(data.as_bytes());
-           let mut count = 0;
-           for result in rdr.deserialize() {
-               let _input_record: InputRecord = result.expect("Failed to parse");
-               count += 1;
-           }
-           assert_eq!(8, count)
+        let mut rdr = ReaderBuilder::new()
+            .trim(Trim::All)
+            .from_reader(data.as_bytes());
+        let mut count = 0;
+        for result in rdr.deserialize() {
+            let _input_record: InputRecord = result.expect("Failed to parse");
+            count += 1;
+        }
+        assert_eq!(8, count)
     }
 
     #[test]
@@ -329,7 +371,6 @@ mod test {
         let expected_output = [(1, 1.5, 0.0, 1.5, false), (2, 2.0, 0.0, 2.0, false)];
         test_helper_func(data, &expected_output);
     }
-
 
     #[test]
     fn dispute_test() {
@@ -454,4 +495,3 @@ mod test {
         test_helper_func2(data, &expected_count);
     }
 }
-

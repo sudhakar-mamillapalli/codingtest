@@ -22,10 +22,10 @@ stdout.
 #ERROR HANDLING
 ****************
 
-For error handling we mostly panic.  For e.g. if the input data is not in
-expected format we don't try to skip or fix them, rather panic and exit.  Even
-if basic infra fails like say main thread is not able to join with a spawned
-worker threads, the whole program just panics.
+For error handling we mostly panic on unexpected conditions.  For e.g. if the
+input data is not in expected format we don't try to skip or fix it, rather
+panic and exit.  Even if basic infra fails like say main thread is not able to
+join with one of the spawned worker threads, the whole program just panics.
 
 Some cases we handle, for e.g. we ignore case for transaction type, or check
 before handling "resolve" or "chargeback" record, that the transaction it is
@@ -40,3 +40,8 @@ much more basic level.  We just check that each worker thread handles the
 clients it is supposed to.  Possibly we can do better here.
 
 No integration tests have been added
+
+For manual testing used input_data dataset, with some minimal debug logs
+indicating how many clients each thread processed.
+RUST_LOG=debug cargo run -- input_data.csv
+
