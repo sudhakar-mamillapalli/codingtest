@@ -6,7 +6,8 @@
 
 We find number of cpus in the system and start as many worker threads and give
 each of them the rx end of a channel where they will receive input records to
-process. The main thread creates as many mpsc channels as worker threads count.
+process. The main thread creates as many mpsc channels as the worker thread
+count.
 
 The main thread reads inputs records from a file  and deserializes then using
 serde/csv and based on client id distributes the work to one of the worker
@@ -36,12 +37,13 @@ referring to is indeed has been disputed previously.
 
 Tested mosly with unit tests to check the basic business logic.  Also
 distributing work to various workers is also tested (just 2 in test), but at a
-much more basic level.  We just check that each worker thread handles the
-clients it is supposed to.  Possibly we can do better here.
+much more basic level.  We just check that each worker thread handles the right
+number of clients it is expected to.  Possibly we can do better here.
 
 No integration tests have been added
 
 For manual testing used input_data dataset, with some minimal debug logs
-indicating how many clients each thread processed.
+indicating how many clients each thread has handled.
+
 RUST_LOG=debug cargo run -- input_data.csv
 

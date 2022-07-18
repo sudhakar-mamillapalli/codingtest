@@ -69,10 +69,6 @@ fn main() {
 fn start_work(thread_count: usize, rdr: &mut csv::Reader<BufReader<File>>) -> u32 {
     /* Start thread_count worker threads and give them each the rx end
      * of a channel where they will receive input records to process.
-     *
-     * The main thread reads in input record and based on clients id
-     * distributes the work to one of the worker threads.  Note that
-     * mapping from a client to a worker thread is fixed.
      */
     let mut thread_info_vec = Vec::new();
     for i in 0..thread_count {
@@ -89,9 +85,10 @@ fn start_work(thread_count: usize, rdr: &mut csv::Reader<BufReader<File>>) -> u3
     }
 
     /*
-     * Using Serde/CSV read the input data as a stream  and based on
+     * The main thread using Serde/CSV reads the input data as a stream  and based on
      * client id send to one of the above worker threads. Workers process
      * input and write it out to stdout
+     * Note that mapping from a client to a worker thread is fixed.
      */
     println!("client, available, held, total, locked");
     io::stdout().flush().expect("Could not flush stdout");
@@ -112,7 +109,7 @@ fn start_work(thread_count: usize, rdr: &mut csv::Reader<BufReader<File>>) -> u3
             .join()
             .expect("failed to join with worker thread");
     }
-    // Return number of client record
+    // Return number of client records
     count
 }
 
@@ -123,7 +120,7 @@ struct TxRecord {
 }
 
 // Keep the processed information regarding a client in here. Note we
-// keep list of transactions of this client here, since if there is
+// store list of transactions of this client too, since if there is
 // a dispute then need to go back and get the original transaction
 // information.
 #[derive(Debug)]
@@ -137,7 +134,8 @@ struct ClientAccount {
 }
 
 // Worker func.  Processes and print outs the account information for
-// client it is resposible for to stdout
+// client it is resposible for to stdout. Returns count of client accounts
+// processed by this worker
 fn worker_func(rx: mpsc::Receiver<InputRecord>) -> u32 {
     let mut count = 0;
     for client_acct in worker_func_helper(rx) {
