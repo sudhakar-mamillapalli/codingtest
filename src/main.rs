@@ -174,6 +174,7 @@ fn worker_func_helper(rx: mpsc::Receiver<InputRecord>) -> impl Iterator<Item = C
                 locked: false,
             });
         if client_acct.locked {
+            // ignore all activity on locked clients
             continue;
         }
         if record.tx_type.eq_ignore_ascii_case("deposit") {
@@ -408,6 +409,22 @@ mod test {
            dispute, 2, 3,
            chargeback, 2, 3,";
         let expected_output = [(1, 1.0, 0.0, 1.0, false), (2, 2.0, 0.0, 2.0, true)];
+        test_helper_func(data, &expected_output);
+    }
+
+    #[test]
+    fn locked_client_test() {
+        // ignore all activity on locked client
+        let data = "\
+           type, client, tx, amount
+           deposit, 1, 1, 1.0
+           deposit, 2, 2, 2.0
+           deposit, 2, 3, 2.0
+           dispute, 2, 3,
+           chargeback, 2, 3,
+           deposit, 1, 1, 1.0
+           deposit, 2, 2, 2.0";
+        let expected_output = [(1, 2.0, 0.0, 2.0, false), (2, 2.0, 0.0, 2.0, true)];
         test_helper_func(data, &expected_output);
     }
 
